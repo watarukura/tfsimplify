@@ -248,8 +248,25 @@ func ensureTerraformInitialized(dir string) error {
 }
 
 func findTerraformFiles(dir string) ([]string, error) {
+	visited := make(map[string]bool)
 	var files []string
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	if err := collectTerraformFiles(dir, visited, &files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func collectTerraformFiles(dir string, visited map[string]bool, files *[]string) error {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if visited[absDir] {
+		return nil
+	}
+	visited[absDir] = true
+
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -262,11 +279,100 @@ func findTerraformFiles(dir string) ([]string, error) {
 			return nil
 		}
 		if strings.HasSuffix(path, ".tf") {
-			files = append(files, path)
+			*files = append(*files, path)
 		}
 		return nil
 	})
-	return files, err
+	if err != nil {
+		return err
+	}
+
+	// Find local module sources and collect their files too
+	moduleDirs, err := findLocalModuleSources(dir)
+	if err != nil {
+		return err
+	}
+	for _, modDir := range moduleDirs {
+		if err := collectTerraformFiles(modDir, visited, files); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// findLocalModuleSources parses .tf files in dir and returns resolved paths
+// of local module sources (those starting with "./" or "../").
+func findLocalModuleSources(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		f, diags := hclwrite.ParseConfig(src, e.Name(), hcl.Pos{Line: 1, Column: 1})
+		if diags.HasErrors() {
+			continue
+		}
+		for _, block := range f.Body().Blocks() {
+			if block.Type() != "module" {
+				continue
+			}
+			sourceAttr := block.Body().GetAttribute("source")
+			if sourceAttr == nil {
+				continue
+			}
+			// Extract string value from source attribute tokens
+			sourceVal := extractStringLiteral(sourceAttr.BuildTokens(nil).Bytes())
+			if sourceVal == "" {
+				continue
+			}
+			if !strings.HasPrefix(sourceVal, "./") && !strings.HasPrefix(sourceVal, "../") {
+				continue
+			}
+			resolved := filepath.Join(dir, sourceVal)
+			abs, err := filepath.Abs(resolved)
+			if err != nil {
+				continue
+			}
+			if seen[abs] {
+				continue
+			}
+			// Verify it's a directory
+			info, err := os.Stat(abs)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			seen[abs] = true
+			dirs = append(dirs, abs)
+		}
+	}
+	return dirs, nil
+}
+
+// extractStringLiteral extracts a string value from HCL attribute bytes like: source = "../module/"
+func extractStringLiteral(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	// Format: name = "value"\n
+	idx := strings.Index(s, "=")
+	if idx < 0 {
+		return ""
+	}
+	val := strings.TrimSpace(s[idx+1:])
+	if len(val) >= 2 && val[0] == '"' {
+		end := strings.LastIndex(val, "\"")
+		if end > 0 {
+			return val[1:end]
+		}
+	}
+	return ""
 }
 
 func processFile(path string, idx *schemaIndex, write bool) (bool, []byte, []byte, error) {
