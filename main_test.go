@@ -224,12 +224,12 @@ func TestPruneBodyAttrs(t *testing.T) {
 
 func TestFindTerraformFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "main.tf"), []byte(""), 0o644)
-	os.WriteFile(filepath.Join(dir, "readme.md"), []byte(""), 0o644)
-	os.MkdirAll(filepath.Join(dir, ".terraform"), 0o755)
-	os.WriteFile(filepath.Join(dir, ".terraform", "skip.tf"), []byte(""), 0o644)
-	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
-	os.WriteFile(filepath.Join(dir, ".git", "skip.tf"), []byte(""), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "main.tf"), []byte(""), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "readme.md"), []byte(""), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, ".terraform"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, ".terraform", "skip.tf"), []byte(""), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, ".git", "skip.tf"), []byte(""), 0o644)
 
 	files, err := findTerraformFiles(dir)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestEnsureTerraformInitialized(t *testing.T) {
 
 	t.Run("initialized", func(t *testing.T) {
 		dir := t.TempDir()
-		os.MkdirAll(filepath.Join(dir, ".terraform"), 0o755)
+		_ = os.MkdirAll(filepath.Join(dir, ".terraform"), 0o755)
 		err := ensureTerraformInitialized(dir)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)

@@ -155,23 +155,23 @@ func unifiedDiff(path string, original, modified []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tmpOrig.Name())
+	defer func() { _ = os.Remove(tmpOrig.Name()) }()
 
 	tmpMod, err := os.CreateTemp("", "tfsimplify-mod-*")
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tmpMod.Name())
+	defer func() { _ = os.Remove(tmpMod.Name()) }()
 
 	if _, err := tmpOrig.Write(original); err != nil {
 		return "", err
 	}
-	tmpOrig.Close()
+	_ = tmpOrig.Close()
 
 	if _, err := tmpMod.Write(modified); err != nil {
 		return "", err
 	}
-	tmpMod.Close()
+	_ = tmpMod.Close()
 
 	cmd := exec.Command("diff", "-u",
 		"--label", path, "--label", path,
