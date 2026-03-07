@@ -243,6 +243,92 @@ func TestFindTerraformFiles(t *testing.T) {
 	}
 }
 
+func TestProcessFileDisableComment(t *testing.T) {
+	schema := testSchemaIndex("aws_s3_bucket", map[string]attrSchema{
+		"force_destroy": {
+			Optional: true,
+			Computed: false,
+			Default:  json.RawMessage(`false`),
+		},
+	})
+
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		changed bool
+	}{
+		{
+			name: "ignore_preserves_next_line",
+			input: `resource "aws_s3_bucket" "example" {
+  # tfsimplify-ignore
+  force_destroy = false
+}
+`,
+			want: `resource "aws_s3_bucket" "example" {
+  # tfsimplify-ignore
+  force_destroy = false
+}
+`,
+			changed: false,
+		},
+		{
+			name: "disable_enable_preserves_range",
+			input: `resource "aws_s3_bucket" "example" {
+  # tfsimplify-disable
+  force_destroy = false
+  # tfsimplify-enable
+}
+`,
+			want: `resource "aws_s3_bucket" "example" {
+  # tfsimplify-disable
+  force_destroy = false
+  # tfsimplify-enable
+}
+`,
+			changed: false,
+		},
+		{
+			name: "without_directive_removes",
+			input: `resource "aws_s3_bucket" "example" {
+  force_destroy = false
+}
+`,
+			want: `resource "aws_s3_bucket" "example" {
+}
+`,
+			changed: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "main.tf")
+			if err := os.WriteFile(path, []byte(tc.input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			changed, _, _, err := processFile(path, schema, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed != tc.changed {
+				t.Errorf("changed = %v, want %v", changed, tc.changed)
+			}
+			if changed {
+				// Re-run with write to check output
+				_, _, formatted, err := processFile(path, schema, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(formatted) != tc.want {
+					t.Errorf("got:\n%s\nwant:\n%s", string(formatted), tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestEnsureTerraformInitialized(t *testing.T) {
 	t.Run("not_initialized", func(t *testing.T) {
 		dir := t.TempDir()

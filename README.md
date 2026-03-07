@@ -83,6 +83,36 @@ resource "aws_s3_bucket" "example" {
 }
 ```
 
+### 無視したい行の指定
+
+tfsimplify-ignore 指定の直下の行は対象外とします。
+
+```hcl
+resource "aws_s3_bucket" "example" {
+  bucket              = "example"
+  bucket_prefix       = null
+  # tfsimplify-ignore
+  force_destroy       = false
+  object_lock_enabled = false
+  tags                = {}
+}
+```
+
+
+tfsimplify-disable と tfsimplify-enable で挟まれた行は対象外とします。
+
+```hcl
+resource "aws_s3_bucket" "example" {
+  bucket              = "example"
+  bucket_prefix       = null
+  # tfsimplify-disable
+  force_destroy       = false
+  # tfsimplify-enable
+  object_lock_enabled = false
+  tags                = {}
+}
+```
+
 ## オプション
 
 | フラグ     | デフォルト | 説明                                           |

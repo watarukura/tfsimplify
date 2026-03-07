@@ -466,6 +466,39 @@ func processFile(path string, idx *schemaIndex, write bool) (bool, []byte, []byt
 		return false, nil, nil, nil
 	}
 
+	// Build set of lines protected by ignore/disable directives.
+	// - "# tfsimplify-ignore" on line N protects line N+1 from removal.
+	// - Lines between "# tfsimplify-disable" and "# tfsimplify-enable" are protected.
+	disabledLines := make(map[int]bool)
+	srcLines := strings.Split(string(src), "\n")
+	inDisableBlock := false
+	for i, line := range srcLines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "# tfsimplify-disable") {
+			inDisableBlock = true
+			continue
+		}
+		if strings.Contains(trimmed, "# tfsimplify-enable") {
+			inDisableBlock = false
+			continue
+		}
+		if inDisableBlock {
+			disabledLines[i+1] = true // 1-based
+		}
+		if strings.Contains(trimmed, "# tfsimplify-ignore") {
+			disabledLines[i+2] = true // protect next line (1-based)
+		}
+	}
+
+	// Exclude disabled lines from removal.
+	for line := range disabledLines {
+		delete(removeLines, line)
+	}
+
+	if len(removeLines) == 0 {
+		return false, nil, nil, nil
+	}
+
 	// Remove lines from original source.
 	lines := strings.Split(string(src), "\n")
 	var result []string
