@@ -126,17 +126,20 @@ func main() {
 
 	changedAny := false
 	for _, path := range tfFiles {
-		changed, err := processFile(path, awsSchema, opt.Write)
+		changed, original, formatted, err := processFile(path, awsSchema, opt.Write)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error processing %s: %v\n", path, err)
 			os.Exit(2)
 		}
 		if changed {
 			changedAny = true
-			if !opt.Write {
-				fmt.Println("would change:", path)
-			} else {
+			if opt.Check {
+				d, _ := unifiedDiff(path, original, formatted)
+				fmt.Print(d)
+			} else if opt.Write {
 				fmt.Println("updated:", path)
+			} else {
+				fmt.Println("would change:", path)
 			}
 		}
 	}
@@ -144,6 +147,37 @@ func main() {
 	if opt.Check && changedAny {
 		os.Exit(1)
 	}
+}
+
+// unifiedDiff generates a unified diff using the external diff command.
+func unifiedDiff(path string, original, modified []byte) (string, error) {
+	tmpOrig, err := os.CreateTemp("", "tfsimplify-orig-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpOrig.Name())
+
+	tmpMod, err := os.CreateTemp("", "tfsimplify-mod-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpMod.Name())
+
+	if _, err := tmpOrig.Write(original); err != nil {
+		return "", err
+	}
+	tmpOrig.Close()
+
+	if _, err := tmpMod.Write(modified); err != nil {
+		return "", err
+	}
+	tmpMod.Close()
+
+	cmd := exec.Command("diff", "-u",
+		"--label", path, "--label", path,
+		tmpOrig.Name(), tmpMod.Name())
+	out, _ := cmd.CombinedOutput() // diff exits 1 when files differ
+	return string(out), nil
 }
 
 // --- Core logic --------------------------------------------------------------
@@ -235,122 +269,166 @@ func findTerraformFiles(dir string) ([]string, error) {
 	return files, err
 }
 
-func processFile(path string, idx *schemaIndex, write bool) (bool, error) {
+func processFile(path string, idx *schemaIndex, write bool) (bool, []byte, []byte, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return false, err
+		return false, nil, nil, err
 	}
 
-	f, diags := hclwrite.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
-	if diags.HasErrors() {
-		return false, fmt.Errorf("parse %s: %s", path, diags.Error())
+	// Use hclwrite to identify removable attributes, then use hclsyntax to get
+	// their source ranges so we can remove lines from the original source,
+	// preserving the formatting of remaining lines.
+
+	wf, wdiags := hclwrite.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
+	if wdiags.HasErrors() {
+		return false, nil, nil, fmt.Errorf("parse %s: %s", path, wdiags.Error())
 	}
-	body := f.Body()
 
-	changed := false
+	sf, sdiags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
+	if sdiags.HasErrors() {
+		return false, nil, nil, fmt.Errorf("parse %s: %s", path, sdiags.Error())
+	}
+	syntaxBody := sf.Body.(*hclsyntax.Body)
 
-	// We only touch top-level resource/data blocks in this minimal version.
-	for _, block := range body.Blocks() {
+	// Collect attribute names to remove per block index.
+	type blockKey struct {
+		typ    string
+		labels string // joined labels
+	}
+	toRemove := make(map[blockKey]map[string]bool)
+
+	for _, block := range wf.Body().Blocks() {
+		var schemaAttrs map[string]attrSchema
 		switch block.Type() {
 		case "resource":
 			labels := block.Labels()
 			if len(labels) < 1 {
 				continue
 			}
-			rType := labels[0]
-			attrs, ok := idx.Resource[rType]
+			attrs, ok := idx.Resource[labels[0]]
 			if !ok {
 				continue
 			}
-			if pruneBodyAttrs(block.Body(), attrs) {
-				changed = true
-			}
+			schemaAttrs = attrs
 		case "data":
 			labels := block.Labels()
 			if len(labels) < 1 {
 				continue
 			}
-			dType := labels[0]
-			attrs, ok := idx.Data[dType]
+			attrs, ok := idx.Data[labels[0]]
 			if !ok {
 				continue
 			}
-			if pruneBodyAttrs(block.Body(), attrs) {
-				changed = true
-			}
+			schemaAttrs = attrs
 		default:
-			// ignore
+			continue
+		}
+		key := blockKey{typ: block.Type(), labels: strings.Join(block.Labels(), "/")}
+		for name, attr := range block.Body().Attributes() {
+			if shouldPrune(name, attr, schemaAttrs) {
+				if toRemove[key] == nil {
+					toRemove[key] = make(map[string]bool)
+				}
+				toRemove[key][name] = true
+			}
 		}
 	}
 
-	if !changed {
-		return false, nil
+	if len(toRemove) == 0 {
+		return false, nil, nil, nil
 	}
 
-	formatted := f.BuildTokens(nil).Bytes()
+	// Now use hclsyntax to find source line ranges for those attributes.
+	removeLines := make(map[int]bool)
+	for _, block := range syntaxBody.Blocks {
+		key := blockKey{typ: block.Type, labels: strings.Join(block.Labels, "/")}
+		names, ok := toRemove[key]
+		if !ok {
+			continue
+		}
+		for name, attr := range block.Body.Attributes {
+			if !names[name] {
+				continue
+			}
+			for line := attr.SrcRange.Start.Line; line <= attr.SrcRange.End.Line; line++ {
+				removeLines[line] = true
+			}
+		}
+	}
 
-	// If you prefer: formatted := f.Bytes()
-	// BuildTokens tends to preserve formatting decisions; either is ok.
+	if len(removeLines) == 0 {
+		return false, nil, nil, nil
+	}
 
-	// Avoid rewriting if unchanged bytes (rare, but safe)
+	// Remove lines from original source.
+	lines := strings.Split(string(src), "\n")
+	var result []string
+	for i, line := range lines {
+		lineNum := i + 1 // 1-based
+		if !removeLines[lineNum] {
+			result = append(result, line)
+		}
+	}
+	formatted := []byte(strings.Join(result, "\n"))
+
 	if bytes.Equal(src, formatted) {
-		return false, nil
+		return false, nil, nil, nil
 	}
 
 	if write {
-		return true, os.WriteFile(path, formatted, 0o644)
+		return true, src, formatted, os.WriteFile(path, formatted, 0o644)
 	}
-	return true, nil
+	return true, src, formatted, nil
 }
 
+// pruneBodyAttrs removes attributes from the body that match their schema defaults.
 func pruneBodyAttrs(b *hclwrite.Body, schemaAttrs map[string]attrSchema) bool {
 	changed := false
-
 	for name, attr := range b.Attributes() {
-		s, ok := schemaAttrs[name]
-		if !ok {
-			continue
-		}
-
-		// Safety gates
-		if !s.Optional || s.Computed {
-			continue
-		}
-		// If no explicit default, infer zero value from type for optional, non-computed attrs
-		if len(bytes.TrimSpace(s.Default)) == 0 {
-			if zd := zeroDefault(s.Type); zd != nil {
-				s.Default = zd
-			} else {
-				continue // default unknown/missing
-			}
-		}
-
-		// Only literal values (no references/functions/templating)
-		v, ok := evalLiteralExprToGo(attr.Expr().BuildTokens(nil).Bytes())
-		if !ok {
-			continue
-		}
-		// Do not delete null (often changes semantics)
-		if v == nil {
-			continue
-		}
-
-		// Parse schema default to Go value
-		var def any
-		if err := json.Unmarshal(s.Default, &def); err != nil {
-			continue
-		}
-		// Also avoid null defaults for now
-		if def == nil {
-			continue
-		}
-
-		if deepEqualJSONish(v, def) {
+		if shouldPrune(name, attr, schemaAttrs) {
 			b.RemoveAttribute(name)
 			changed = true
 		}
 	}
 	return changed
+}
+
+// shouldPrune returns true if the given attribute should be removed because
+// its value matches the provider schema default.
+func shouldPrune(name string, attr *hclwrite.Attribute, schemaAttrs map[string]attrSchema) bool {
+	s, ok := schemaAttrs[name]
+	if !ok {
+		return false
+	}
+
+	if !s.Optional || s.Computed {
+		return false
+	}
+	if len(bytes.TrimSpace(s.Default)) == 0 {
+		if zd := zeroDefault(s.Type); zd != nil {
+			s.Default = zd
+		} else {
+			return false
+		}
+	}
+
+	v, ok := evalLiteralExprToGo(attr.Expr().BuildTokens(nil).Bytes())
+	if !ok {
+		return false
+	}
+	if v == nil {
+		return false
+	}
+
+	var def any
+	if err := json.Unmarshal(s.Default, &def); err != nil {
+		return false
+	}
+	if def == nil {
+		return false
+	}
+
+	return deepEqualJSONish(v, def)
 }
 
 // zeroDefault returns the JSON-encoded zero value for a primitive type schema.
