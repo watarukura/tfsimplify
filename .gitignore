@@ -1,0 +1,5 @@
+.junie/
+.env
+.terraform/
+.terraform.lock.hcl
+example/
