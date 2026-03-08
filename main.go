@@ -108,20 +108,29 @@ func main() {
 		os.Exit(2)
 	}
 
-	schema, err := loadProviderSchemas(opt.Dir)
+	code := run(opt, loadProviderSchemas)
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+type schemaLoader func(dir string) (*schemaIndex, error)
+
+func run(opt options, loader schemaLoader) int {
+	schema, err := loader(opt.Dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error loading terraform provider schema:", err)
-		os.Exit(2)
+		return 2
 	}
 
 	tfFiles, err := findTerraformFiles(opt.Dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error scanning directory:", err)
-		os.Exit(2)
+		return 2
 	}
 	if len(tfFiles) == 0 {
 		fmt.Println("no .tf files found")
-		return
+		return 0
 	}
 
 	changedAny := false
@@ -129,7 +138,7 @@ func main() {
 		changed, original, formatted, err := processFile(path, schema, opt.Write)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error processing %s: %v\n", path, err)
-			os.Exit(2)
+			return 2
 		}
 		if changed {
 			changedAny = true
@@ -145,8 +154,9 @@ func main() {
 	}
 
 	if opt.Check && changedAny {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // unifiedDiff generates a unified diff using the external diff command.
@@ -202,8 +212,12 @@ func loadProviderSchemas(dir string) (*schemaIndex, error) {
 		)
 	}
 
+	return parseProviderSchemas(out, dir)
+}
+
+func parseProviderSchemas(data []byte, dir string) (*schemaIndex, error) {
 	var root providersSchemaJSON
-	if err := json.Unmarshal(out, &root); err != nil {
+	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, err
 	}
 
