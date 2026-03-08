@@ -108,7 +108,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	awsSchema, err := loadAWSSchemaFromTerraform(opt.Dir)
+	schema, err := loadProviderSchemas(opt.Dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error loading terraform provider schema:", err)
 		os.Exit(2)
@@ -126,7 +126,7 @@ func main() {
 
 	changedAny := false
 	for _, path := range tfFiles {
-		changed, original, formatted, err := processFile(path, awsSchema, opt.Write)
+		changed, original, formatted, err := processFile(path, schema, opt.Write)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error processing %s: %v\n", path, err)
 			os.Exit(2)
@@ -187,7 +187,7 @@ type schemaIndex struct {
 	Data     map[string]map[string]attrSchema // dataType     -> attrName -> schema
 }
 
-func loadAWSSchemaFromTerraform(dir string) (*schemaIndex, error) {
+func loadProviderSchemas(dir string) (*schemaIndex, error) {
 	if err := ensureTerraformInitialized(dir); err != nil {
 		return nil, err
 	}
@@ -207,29 +207,21 @@ func loadAWSSchemaFromTerraform(dir string) (*schemaIndex, error) {
 		return nil, err
 	}
 
-	awsProv, ok := root.ProviderSchemas["registry.terraform.io/hashicorp/aws"]
-	if !ok {
-		for k, v := range root.ProviderSchemas {
-			if strings.HasSuffix(k, "/aws") {
-				awsProv = v
-				ok = true
-				break
-			}
-		}
-	}
-	if !ok {
-		return nil, fmt.Errorf("aws provider schema not found in %s", dir)
+	if len(root.ProviderSchemas) == 0 {
+		return nil, fmt.Errorf("no provider schemas found in %s", dir)
 	}
 
 	idx := &schemaIndex{
 		Resource: make(map[string]map[string]attrSchema),
 		Data:     make(map[string]map[string]attrSchema),
 	}
-	for rType, rs := range awsProv.ResourceSchemas {
-		idx.Resource[rType] = rs.Block.Attributes
-	}
-	for dType, ds := range awsProv.DataSourceSchemas {
-		idx.Data[dType] = ds.Block.Attributes
+	for _, prov := range root.ProviderSchemas {
+		for rType, rs := range prov.ResourceSchemas {
+			idx.Resource[rType] = rs.Block.Attributes
+		}
+		for dType, ds := range prov.DataSourceSchemas {
+			idx.Data[dType] = ds.Block.Attributes
+		}
 	}
 
 	return idx, nil

@@ -5,7 +5,7 @@ Terraform の `.tf` ファイルから、プロバイダースキーマのデフ
 
 ## 特徴
 
-- AWS プロバイダーのスキーマ情報を `terraform providers schema -json` から取得し、デフォルト値を判定
+- すべての Terraform プロバイダーのスキーマ情報を `terraform providers schema -json` から取得し、デフォルト値を判定
 - `optional` かつ非 `computed` な属性のみを対象とし、安全に削除
 - `--write` でファイルを直接書き換え、`--check` で CI での差分チェックに対応
 - リテラル値のみを対象とし、変数参照や関数呼び出しを含む式は変更しない
@@ -15,6 +15,7 @@ Terraform の `.tf` ファイルから、プロバイダースキーマのデフ
 - [Go](https://go.dev/) 1.25 以上
 - [Terraform](https://www.terraform.io/) CLI がインストール済みであること
 - 対象ディレクトリで `terraform init` が実行済みであること
+- diff コマンドがインストール済みであること
 
 ## インストール
 

@@ -24,7 +24,7 @@ resource "aws_s3_bucket" "example" {
 }
 ```
 
-AWS provider の default が `false` の場合、以下へ変換される。
+provider の default が `false` の場合、以下へ変換される。
 
 ```hcl
 resource "aws_s3_bucket" "example" {}
@@ -46,7 +46,7 @@ data
 対象 provider:
 
 ```
-hashicorp/aws
+terraform providers schema -json で取得できるすべての provider
 ```
 
 ---
@@ -99,7 +99,7 @@ start
   │
   ├─ terraform providers schema -json 実行
   │
-  ├─ AWS provider schema 抽出
+  ├─ 全 provider schema 抽出
   │
   ├─ .tf ファイル探索
   │
@@ -146,7 +146,7 @@ run: terraform init
 
 # 6. Provider Schema 取得
 
-AWS provider の attribute default を取得するため、
+各 provider の attribute default を取得するため、
 
 ```
 terraform providers schema -json
@@ -157,7 +157,7 @@ terraform providers schema -json
 取得対象:
 
 ```
-provider_schemas["registry.terraform.io/hashicorp/aws"]
+provider_schemas 内のすべての provider を対象とする
 ```
 
 必要な情報:
@@ -414,16 +414,8 @@ ternary
 
 ## provider 自動検出
 
-現在
-
 ```
-aws 固定
-```
-
-将来
-
-```
-任意 provider
+terraform providers schema -json で取得できるすべての provider を自動検出（実装済み）
 ```
 
 ---
@@ -491,7 +483,7 @@ tfsimplify
 本ツールは以下を実現する。
 
 * Terraform provider schema を利用した **安全な default attribute 削除**
-* AWS provider に特化した **シンプルな初期実装**
+* すべての Terraform provider に対応
 * `terraform init` 済み環境で動作
 * CI で利用可能な **check モード**
 
@@ -500,7 +492,6 @@ tfsimplify
 
 * module variable default
 * nested block
-* provider 自動検出
 * diff 表示
 
 ---
